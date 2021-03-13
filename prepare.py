@@ -18,7 +18,7 @@ redirect = {
 }
 
 for (src, dest) in redirect.items():
-    print('preparing', dest, "...", end='')
+    print('preparing', dest, "...")
     src_path = opt.data_path + '/' + src
     dst_path = save_path + '/' + dest
 
@@ -36,10 +36,8 @@ for (src, dest) in redirect.items():
                 os.mkdir(person_dst_path)
             copyfile(person_src_path, person_dst_path + '/' + name)
 
-    print('done!')
-
 # train and val set
-print('prepare train and validation set ...', end='')
+print('prepare train and validation set ...')
 train_path = opt.data_path + '/bounding_box_train'
 train_save_path = save_path + '/train'
 val_save_path = save_path + '/val'
@@ -61,4 +59,4 @@ for root, dirs, files in os.walk(train_path, topdown=True):
             os.mkdir(dst_path)
         copyfile(src_path, dst_path + '/' + name)
 
-print('done!')
+print('all done!')
