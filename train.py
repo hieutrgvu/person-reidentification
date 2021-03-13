@@ -1,22 +1,21 @@
 from __future__ import print_function, division
 
-import argparse
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim import lr_scheduler
+from model import PCB
+from random_erasing import RandomErasing
+from shutil import copyfile
 from torch.autograd import Variable
+from torch.optim import lr_scheduler
 from torchvision import datasets, transforms
-import torch.backends.cudnn as cudnn
+import argparse
 import matplotlib
 import matplotlib.pyplot as plt
-import time
 import os
-from model import ft_net, ft_net_dense, ft_net_NAS, PCB
-from random_erasing import RandomErasing
+import time
+import torch
+import torch.backends.cudnn as cudnn
+import torch.nn as nn
+import torch.optim as optim
 import yaml
-from shutil import copyfile
-from circle_loss import CircleLoss, convert_label_to_similarity
 
 matplotlib.use('agg')
 
@@ -29,14 +28,9 @@ parser.add_argument('--name', default='ft_ResNet50', type=str, help='output mode
 parser.add_argument('--data-dir', default='./market/pytorch', type=str, help='training dir path')
 parser.add_argument('--color-jitter', action='store_true', help='use color jitter in training')
 parser.add_argument('--batch-size', default=32, type=int, help='batch size')
-parser.add_argument('--stride', default=2, type=int, help='stride')
 parser.add_argument('--erase-prob', default=0, type=float, help='random erasing probability, in [0,1]')
-parser.add_argument('--use_dense', action='store_true', help='use densenet121')
-parser.add_argument('--use_NAS', action='store_true', help='use NAS')
-parser.add_argument('--warm_epoch', default=0, type=int, help='the first K epoch that needs warm up')
+parser.add_argument('--warm-epoch', default=0, type=int, help='the first K epoch that needs warm up')
 parser.add_argument('--lr', default=0.05, type=float, help='learning rate')
-parser.add_argument('--droprate', default=0.5, type=float, help='drop rate')
-parser.add_argument('--circle', action='store_true', help='use Circle loss')
 opt = parser.parse_args()
 
 data_dir = opt.data_dir
@@ -67,7 +61,7 @@ if opt.erase_prob > 0:
 if opt.color_jitter:
     transform_train_list += [transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0)]
 
-print(transform_train_list)
+print('dataset transformation: ', transform_train_list)
 data_transforms = {
     'train': transforms.Compose(transform_train_list),
     'val': transforms.Compose(transform_val_list),
@@ -83,7 +77,7 @@ data_loaders = {
         value,
         batch_size=opt.batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=os.cpu_count(),
         pin_memory=True
     )
     for key, value in image_datasets.items()
@@ -101,20 +95,20 @@ since = time.time()
 inputs, classes = next(iter(data_loaders['train']))
 print('loading time (s):', time.time() - since)
 
-# train the model
-y_loss = {'train': [], 'val': []}  # loss history
+# loss history
+y_loss = {'train': [], 'val': []}
 y_err = {'train': [], 'val': []}
 
 
+# define model training
 def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
     since = time.time()
 
     # best_model_wts = model.state_dict()
     # best_acc = 0.0
-    warm_up = 0.1  # We start from the 0.1*lrRate
+    warm_up = 0.1  # start from the 0.1*lrRate
     warm_iteration = round(dataset_sizes['train'] / opt.batch_size) * opt.warm_epoch  # first 5 epoch
-    if opt.circle:
-        criterion_circle = CircleLoss(m=0.25, gamma=32)
+
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -158,26 +152,18 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                     outputs = model(inputs)
 
                 sm = nn.Softmax(dim=1)
-                if opt.circle:
-                    logits, ff = outputs
-                    fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
-                    ff = ff.div(fnorm.expand_as(ff))
-                    loss = criterion(logits, labels) + criterion_circle(
-                        *convert_label_to_similarity(ff, labels)) / now_batch_size
-                    # loss = criterion_circle(*convert_label_to_similarity( ff, labels))
-                    _, preds = torch.max(logits.data, 1)
-                else:  # PCB
-                    part = {}
-                    num_part = 6
-                    for i in range(num_part):
-                        part[i] = outputs[i]
 
-                    score = sm(part[0]) + sm(part[1]) + sm(part[2]) + sm(part[3]) + sm(part[4]) + sm(part[5])
-                    _, preds = torch.max(score.data, 1)
+                part = {}
+                num_part = 6
+                for i in range(num_part):
+                    part[i] = outputs[i]
 
-                    loss = criterion(part[0], labels)
-                    for i in range(num_part - 1):
-                        loss += criterion(part[i + 1], labels)
+                score = sm(part[0]) + sm(part[1]) + sm(part[2]) + sm(part[3]) + sm(part[4]) + sm(part[5])
+                _, preds = torch.max(score.data, 1)
+
+                loss = criterion(part[0], labels)
+                for i in range(num_part - 1):
+                    loss += criterion(part[i + 1], labels)
 
                 # backward + optimize only if in training phase
                 if epoch < opt.warm_epoch and phase == 'train':
@@ -259,18 +245,11 @@ def save_network(network, epoch_label):
 
 
 ######################################################################
-# Finetuning the convnet
+# Fine-tuning the conv net
 # ----------------------
 #
-# Load a pretrainied model and reset final fully connected layer.
+# Load a pre-trained model and reset final fully connected layer.
 #
-
-if opt.use_dense:
-    model = ft_net_dense(len(class_names), opt.droprate, circle=opt.circle)
-elif opt.use_NAS:
-    model = ft_net_NAS(len(class_names), opt.droprate)
-else:
-    model = ft_net(len(class_names), opt.droprate, opt.stride, circle=opt.circle)
 
 model = PCB(len(class_names))
 
@@ -326,5 +305,4 @@ with open('%s/opts.yaml' % dir_name, 'w') as fp:
 model = model.cuda()
 criterion = nn.CrossEntropyLoss()
 
-model = train_model(model, criterion, optimizer_ft, exp_lr_scheduler,
-                    num_epochs=60)
+model = train_model(model, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=60)
