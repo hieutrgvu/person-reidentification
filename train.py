@@ -139,14 +139,9 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                     outputs = model(inputs)
 
                 sm = nn.Softmax(dim=1)
-
-                parts, num_parts = {}, 6
-                for i in range(num_parts):
-                    parts[i] = outputs[i]
-
-                score = sum([sm(v) for v in parts.values()])
+                score = sum([sm(part) for part in outputs])
                 _, predict = torch.max(score.data, 1)
-                loss = sum([criterion(v, labels) for v in parts.values()])
+                loss = sum([criterion(part, labels) for part in outputs])
 
                 if phase == 'train':
                     loss.backward()
@@ -247,8 +242,7 @@ exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=40, gamma=0.1)
 
 # record every run
 dir_name = os.path.join('./model', name)
-if not os.path.isdir(dir_name):
-    os.makedirs(dir_name, exist_ok=True)
+os.makedirs(dir_name, exist_ok=True)
 copyfile('./train.py', dir_name + '/train.py')
 copyfile('./model.py', dir_name + '/model.py')
 
