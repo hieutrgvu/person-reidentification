@@ -103,43 +103,42 @@ y_err = {'train': [], 'val': []}
 # define model training
 def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
     since = time.time()
-
     # best_model_wts = model.state_dict()
     # best_acc = 0.0
     warm_up = 0.1  # start from the 0.1*lrRate
-    warm_iteration = round(dataset_sizes['train'] / opt.batch_size) * opt.warm_epoch  # first 5 epoch
+    warm_iteration = round(dataset_sizes['train'] / opt.batch_size) * opt.warm_epoch
 
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
 
-        # Each epoch has a training and validation phase
+        # each epoch has a training and validation phase
         for phase in ['train', 'val']:
+            # set model to training or evaluation mode
             if phase == 'train':
                 scheduler.step()
-                model.train(True)  # Set model to training mode
+                model.train(True)
             else:
-                model.train(False)  # Set model to evaluate mode
+                model.train(False)
 
             running_loss = 0.0
             running_corrects = 0.0
-            # Iterate over data.
+
+            # iterate over data.
             for data in data_loaders[phase]:
                 # get the inputs
                 inputs, labels = data
-                now_batch_size, c, h, w = inputs.shape
-                if now_batch_size < opt.batch_size:  # skip the last batch
+                batch_size, c, h, w = inputs.shape
+                if batch_size < opt.batch_size:  # skip the last batch
                     continue
                 # print(inputs.shape)
-                # wrap them in Variable
+
+                # wrap in variable
                 if use_gpu:
                     inputs = Variable(inputs.cuda().detach())
                     labels = Variable(labels.cuda().detach())
                 else:
                     inputs, labels = Variable(inputs), Variable(labels)
-                # if we use low precision, input also need to be fp16
-                # if fp16:
-                #    inputs = inputs.half()
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
@@ -159,13 +158,13 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                     part[i] = outputs[i]
 
                 score = sm(part[0]) + sm(part[1]) + sm(part[2]) + sm(part[3]) + sm(part[4]) + sm(part[5])
-                _, preds = torch.max(score.data, 1)
+                _, predict = torch.max(score.data, 1)
 
                 loss = criterion(part[0], labels)
                 for i in range(num_part - 1):
                     loss += criterion(part[i + 1], labels)
 
-                # backward + optimize only if in training phase
+                # backward and optimize only if in training phase
                 if epoch < opt.warm_epoch and phase == 'train':
                     warm_up = min(1.0, warm_up + 0.9 / warm_iteration)
                     loss = loss * warm_up
@@ -175,20 +174,20 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                     optimizer.step()
 
                 # statistics
-                if int(version[0]) > 0 or int(version[2]) > 3:  # for the new version like 0.4.0, 0.5.0 and 1.0.0
-                    running_loss += loss.item() * now_batch_size
-                else:  # for the old version like 0.3.0 and 0.3.1
-                    running_loss += loss.data[0] * now_batch_size
-                running_corrects += float(torch.sum(preds == labels.data))
+                if int(version[0]) > 0 or int(version[2]) > 3:
+                    # for the new version like 0.4.0, 0.5.0 and 1.0.0
+                    running_loss += loss.item() * batch_size
+                else:
+                    # for the old version like 0.3.0 and 0.3.1
+                    running_loss += loss.data[0] * batch_size
+                running_corrects += float(torch.sum(predict == labels.data))
 
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects / dataset_sizes[phase]
-
-            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-                phase, epoch_loss, epoch_acc))
-
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
             y_loss[phase].append(epoch_loss)
             y_err[phase].append(1.0 - epoch_acc)
+
             # deep copy the model
             if phase == 'val':
                 last_model_wts = model.state_dict()
@@ -197,13 +196,11 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 draw_curve(epoch)
 
         time_elapsed = time.time() - since
-        print('Training complete in {:.0f}m {:.0f}s'.format(
-            time_elapsed // 60, time_elapsed % 60))
+        print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
         print()
 
     time_elapsed = time.time() - since
-    print('Training complete in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60))
+    print('All training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
     # print('Best val Acc: {:4f}'.format(best_acc))
 
     # load best model weights
@@ -212,9 +209,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
     return model
 
 
-######################################################################
-# Draw Curve
-# ---------------------------
+# draw Curve
 x_epoch = []
 fig = plt.figure()
 ax0 = fig.add_subplot(121, title="loss")
@@ -233,9 +228,7 @@ def draw_curve(current_epoch):
     fig.savefig(os.path.join('./model', name, 'train.jpg'))
 
 
-######################################################################
-# Save model
-# ---------------------------
+# save model
 def save_network(network, epoch_label):
     save_filename = 'net_%s.pth' % epoch_label
     save_path = os.path.join('./model', name, save_filename)
@@ -244,18 +237,10 @@ def save_network(network, epoch_label):
         network.cuda(gpu_id)
 
 
-######################################################################
-# Fine-tuning the conv net
-# ----------------------
-#
-# Load a pre-trained model and reset final fully connected layer.
-#
-
+# fine-tuning the conv net
+# load a pre-trained model and reset final fully connected layer.
 model = PCB(len(class_names))
-
-opt.nclasses = len(class_names)
-
-print(model)
+print('model: ', model, '\n')
 
 ignored_params = list(map(id, model.model.fc.parameters()))
 ignored_params += (list(map(id, model.classifier0.parameters()))
@@ -264,40 +249,35 @@ ignored_params += (list(map(id, model.classifier0.parameters()))
                    + list(map(id, model.classifier3.parameters()))
                    + list(map(id, model.classifier4.parameters()))
                    + list(map(id, model.classifier5.parameters()))
-                   # +list(map(id, model.classifier6.parameters() ))
-                   # +list(map(id, model.classifier7.parameters() ))
+                   # +list(map(id, model.classifier6.parameters()))
+                   # +list(map(id, model.classifier7.parameters()))
                    )
 base_params = filter(lambda p: id(p) not in ignored_params, model.parameters())
 optimizer_ft = optim.SGD([
     {'params': base_params, 'lr': 0.1 * opt.lr},
-    {'params': model.model.fc.parameters(), 'lr': opt.lr},
-    {'params': model.classifier0.parameters(), 'lr': opt.lr},
-    {'params': model.classifier1.parameters(), 'lr': opt.lr},
-    {'params': model.classifier2.parameters(), 'lr': opt.lr},
-    {'params': model.classifier3.parameters(), 'lr': opt.lr},
-    {'params': model.classifier4.parameters(), 'lr': opt.lr},
-    {'params': model.classifier5.parameters(), 'lr': opt.lr},
+    {'params': model.model.fc.parameters()},
+    {'params': model.classifier0.parameters()},
+    {'params': model.classifier1.parameters()},
+    {'params': model.classifier2.parameters()},
+    {'params': model.classifier3.parameters()},
+    {'params': model.classifier4.parameters()},
+    {'params': model.classifier5.parameters()},
     # {'params': model.classifier6.parameters(), 'lr': 0.01},
     # {'params': model.classifier7.parameters(), 'lr': 0.01}
-], weight_decay=5e-4, momentum=0.9, nesterov=True)
+], lr=opt.lr, weight_decay=5e-4, momentum=0.9, nesterov=True)
 
-# Decay LR by a factor of 0.1 every 40 epochs
+# decay learning rate by a factor of 0.1 every 40 epochs
 exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=40, gamma=0.1)
 
-######################################################################
-# Train and evaluate
-# ^^^^^^^^^^^^^^^^^^
-#
-# It should take around 1-2 hours on GPU.
-#
+# record every run
 dir_name = os.path.join('./model', name)
 if not os.path.isdir(dir_name):
     os.makedirs(dir_name, exist_ok=True)
-# record every run
 copyfile('./train.py', dir_name + '/train.py')
 copyfile('./model.py', dir_name + '/model.py')
 
 # save opts
+opt.num_classes = len(class_names)
 with open('%s/opts.yaml' % dir_name, 'w') as fp:
     yaml.dump(vars(opt), fp, default_flow_style=False)
 
@@ -305,4 +285,5 @@ with open('%s/opts.yaml' % dir_name, 'w') as fp:
 model = model.cuda()
 criterion = nn.CrossEntropyLoss()
 
-model = train_model(model, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=60)
+# train and evaluate
+train_model(model, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=60)
