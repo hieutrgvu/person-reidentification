@@ -29,7 +29,6 @@ parser.add_argument('--data-dir', default='./market/pytorch', type=str, help='tr
 parser.add_argument('--color-jitter', action='store_true', help='use color jitter in training')
 parser.add_argument('--batch-size', default=32, type=int, help='batch size')
 parser.add_argument('--erase-prob', default=0, type=float, help='random erasing probability, in [0,1]')
-parser.add_argument('--warm-epoch', default=0, type=int, help='the first K epoch that needs warm up')
 parser.add_argument('--lr', default=0.05, type=float, help='learning rate')
 opt = parser.parse_args()
 
@@ -103,10 +102,6 @@ y_err = {'train': [], 'val': []}
 # define model training
 def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
     since = time.time()
-    # best_model_wts = model.state_dict()
-    # best_acc = 0.0
-    warm_up = 0.1  # start from the 0.1*lrRate
-    warm_iteration = round(dataset_sizes['train'] / opt.batch_size) * opt.warm_epoch
 
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
@@ -115,11 +110,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
         # each epoch has a training and validation phase
         for phase in ['train', 'val']:
             # set model to training or evaluation mode
-            if phase == 'train':
-                scheduler.step()
-                model.train(True)
-            else:
-                model.train(False)
+            model.train(phase == 'train')
 
             running_loss = 0.0
             running_corrects = 0.0
@@ -129,9 +120,9 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 # get the inputs
                 inputs, labels = data
                 batch_size, c, h, w = inputs.shape
-                if batch_size < opt.batch_size:  # skip the last batch
+                if batch_size < opt.batch_size:
+                    # skip the last batch
                     continue
-                # print(inputs.shape)
 
                 # wrap in variable
                 if use_gpu:
@@ -144,30 +135,18 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 optimizer.zero_grad()
 
                 # forward
-                if phase == 'val':
-                    with torch.no_grad():
-                        outputs = model(inputs)
-                else:
+                with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
 
                 sm = nn.Softmax(dim=1)
 
-                part = {}
-                num_part = 6
-                for i in range(num_part):
-                    part[i] = outputs[i]
+                parts, num_parts = {}, 6
+                for i in range(num_parts):
+                    parts[i] = outputs[i]
 
-                score = sm(part[0]) + sm(part[1]) + sm(part[2]) + sm(part[3]) + sm(part[4]) + sm(part[5])
+                score = sum([sm(v) for v in parts.values()])
                 _, predict = torch.max(score.data, 1)
-
-                loss = criterion(part[0], labels)
-                for i in range(num_part - 1):
-                    loss += criterion(part[i + 1], labels)
-
-                # backward and optimize only if in training phase
-                if epoch < opt.warm_epoch and phase == 'train':
-                    warm_up = min(1.0, warm_up + 0.9 / warm_iteration)
-                    loss = loss * warm_up
+                loss = sum([criterion(v, labels) for v in parts.values()])
 
                 if phase == 'train':
                     loss.backward()
@@ -188,6 +167,9 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
             y_loss[phase].append(epoch_loss)
             y_err[phase].append(1.0 - epoch_acc)
 
+            if phase == 'train':
+                scheduler.step()
+
             # deep copy the model
             if phase == 'val':
                 last_model_wts = model.state_dict()
@@ -201,7 +183,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 
     time_elapsed = time.time() - since
     print('All training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-    # print('Best val Acc: {:4f}'.format(best_acc))
 
     # load best model weights
     model.load_state_dict(last_model_wts)
@@ -209,7 +190,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
     return model
 
 
-# draw Curve
+# draw curve
 x_epoch = []
 fig = plt.figure()
 ax0 = fig.add_subplot(121, title="loss")
@@ -237,8 +218,7 @@ def save_network(network, epoch_label):
         network.cuda(gpu_id)
 
 
-# fine-tuning the conv net
-# load a pre-trained model and reset final fully connected layer.
+# fine-tuning the conv net: load a pre-trained model and reset final fully connected layer.
 model = PCB(len(class_names))
 print('model: ', model, '\n')
 
@@ -249,8 +229,6 @@ ignored_params += (list(map(id, model.classifier0.parameters()))
                    + list(map(id, model.classifier3.parameters()))
                    + list(map(id, model.classifier4.parameters()))
                    + list(map(id, model.classifier5.parameters()))
-                   # +list(map(id, model.classifier6.parameters()))
-                   # +list(map(id, model.classifier7.parameters()))
                    )
 base_params = filter(lambda p: id(p) not in ignored_params, model.parameters())
 optimizer_ft = optim.SGD([
@@ -262,8 +240,6 @@ optimizer_ft = optim.SGD([
     {'params': model.classifier3.parameters()},
     {'params': model.classifier4.parameters()},
     {'params': model.classifier5.parameters()},
-    # {'params': model.classifier6.parameters(), 'lr': 0.01},
-    # {'params': model.classifier7.parameters(), 'lr': 0.01}
 ], lr=opt.lr, weight_decay=5e-4, momentum=0.9, nesterov=True)
 
 # decay learning rate by a factor of 0.1 every 40 epochs
