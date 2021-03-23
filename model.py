@@ -53,7 +53,7 @@ class ClassBlock(nn.Module):
 
 
 class PCB(nn.Module):
-    def __init__(self, class_num ):
+    def __init__(self, class_num):
         super(PCB, self).__init__()
 
         self.part = 6

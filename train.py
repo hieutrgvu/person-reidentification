@@ -217,24 +217,19 @@ def save_network(network, epoch_label):
 model = PCB(len(class_names))
 print('model: ', model, '\n')
 
-ignored_params = list(map(id, model.model.fc.parameters()))
-ignored_params += (list(map(id, model.classifier0.parameters()))
-                   + list(map(id, model.classifier1.parameters()))
-                   + list(map(id, model.classifier2.parameters()))
-                   + list(map(id, model.classifier3.parameters()))
-                   + list(map(id, model.classifier4.parameters()))
-                   + list(map(id, model.classifier5.parameters()))
-                   )
-base_params = filter(lambda p: id(p) not in ignored_params, model.parameters())
+train_param_ids = list(map(id, model.model.fc.parameters()))
+train_param_ids += (list(map(id, model.classifier0.parameters()))
+                    + list(map(id, model.classifier1.parameters()))
+                    + list(map(id, model.classifier2.parameters()))
+                    + list(map(id, model.classifier3.parameters()))
+                    + list(map(id, model.classifier4.parameters()))
+                    + list(map(id, model.classifier5.parameters()))
+                    )
+base_params = filter(lambda p: id(p) not in train_param_ids, model.parameters())
+train_params = filter(lambda p: id(p) in train_param_ids, model.parameters())
 optimizer_ft = optim.SGD([
     {'params': base_params, 'lr': 0.1 * opt.lr},
-    {'params': model.model.fc.parameters()},
-    {'params': model.classifier0.parameters()},
-    {'params': model.classifier1.parameters()},
-    {'params': model.classifier2.parameters()},
-    {'params': model.classifier3.parameters()},
-    {'params': model.classifier4.parameters()},
-    {'params': model.classifier5.parameters()},
+    {'params': train_params},
 ], lr=opt.lr, weight_decay=5e-4, momentum=0.9, nesterov=True)
 
 # decay learning rate by a factor of 0.1 every 40 epochs
