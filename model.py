@@ -3,6 +3,39 @@ import torch.nn as nn
 from torch.nn import init
 from torchvision import models
 from torch.autograd import Variable
+import torch.nn.functional as F
+
+
+class STN(nn.Module):
+    def __init__(self, input_dim, sequential=nn.Sequential(nn.Linear(480, 32), nn.ReLU(True), nn.Linear(32, 3 * 2))):
+        super(STN, self).__init__()
+        # spatial transformer localization-network
+        self.localization = nn.Sequential(
+            # nn.Conv2d(input_dim, 8, kernel_size=7),
+            # nn.MaxPool2d(2, stride=2),
+            # nn.ReLU(True),
+            # nn.Conv2d(8, 10, kernel_size=5),
+            # nn.MaxPool2d(2, stride=2),
+            nn.Conv2d(input_dim, 10, kernel_size=1),
+            nn.ReLU(True)
+        )
+
+        # regressor for the 3 * 2 affine matrix
+        self.fc_loc = sequential
+
+        # initialize the weights/bias with identity transformation
+        self.fc_loc[2].weight.data.zero_()
+        self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def forward(self, x):
+        xs = self.localization(x)
+        xs = xs.view(-1, 480)
+        theta = self.fc_loc(xs)
+        theta = theta.view(-1, 2, 3)
+        grid = F.affine_grid(theta, x.size())
+        x = F.grid_sample(x, grid)
+
+        return x
 
 
 def weights_init_kaiming(m):
@@ -56,9 +89,11 @@ class PCB(nn.Module):
     def __init__(self, class_num):
         super(PCB, self).__init__()
 
-        self.part = 6
+        self.num_parts = 6
         self.model = models.resnet50(pretrained=True)
-        self.avgpool = nn.AdaptiveAvgPool2d((self.part, 1))
+        self.stn = STN(2048)
+        self.avgpool = nn.AdaptiveAvgPool2d((self.num_parts, 1))
+        self.avgpool1 = nn.AdaptiveAvgPool2d((1, 1))
         self.dropout = nn.Dropout(p=0.5)
 
         # remove the final downsample
@@ -66,7 +101,7 @@ class PCB(nn.Module):
         self.model.layer4[0].conv2.stride = (1, 1)
 
         # define classifier for each part
-        for i in range(self.part):
+        for i in range(self.num_parts):
             name = 'classifier' + str(i)
             setattr(self, name, ClassBlock(2048, class_num, drop_rate=0.5))
 
@@ -79,12 +114,24 @@ class PCB(nn.Module):
         x = self.model.layer2(x)
         x = self.model.layer3(x)
         x = self.model.layer4(x)
+        parts = torch.tensor_split(x, self.num_parts, dim=2)
+        predict = {}
+        for i, p in enumerate(parts):
+            p = self.stn(p)
+            p = self.avgpool1(p)
+            p = self.dropout(p)
+            p = p.view(p.size(0), p.size(1))
+            name = 'classifier' + str(i)
+            c = getattr(self, name)
+            predict[i] = c(p)
+        return list(predict.values())
+
         x = self.avgpool(x)
         x = self.dropout(x)
 
         # get six part feature batchsize*2048*6
         part, predict = {}, {}
-        for i in range(self.part):
+        for i in range(self.num_parts):
             part[i] = x[:, :, i].view(x.size(0), x.size(1))
             name = 'classifier' + str(i)
             c = getattr(self, name)
@@ -100,7 +147,7 @@ $ python model.py
 if __name__ == '__main__':
     net = PCB(500)
     print(net)
-    input = Variable(torch.FloatTensor(32, 3, 256, 128))
+    input = Variable(torch.FloatTensor(32, 3, 384, 192))
     print('input shape:', input.shape)
     outputs = net(input)
     print('output shape:', len(outputs), 'parts x', outputs[0].shape)
